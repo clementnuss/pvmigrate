@@ -33,6 +33,7 @@ pvmigrate --source-sc "source" --dest-sc "destination" --preflight-validation-on
 | --source-sc                 | String  | ✓        |                  | storage provider name to migrate from                                                              |
 | --dest-sc                   | String  | ✓        |                  | storage provider name to migrate to                                                                |
 | --namespace                 | String  |          |                  | only migrate PVCs within this namespace                                                            |
+| --pvc-name                   | String  |          |                  | migrate only the PVC with this name (requires --namespace, as PVC names are not unique across namespaces) |
 | --rsync-image               | String  |          | eeacms/rsync:2.3 | the image to use to copy PVCs - must have 'rsync' on the path                                      |
 | --rsync-flags               | String  |          |                  | A comma-separated list of additional flags to pass to rsync when copying PVCs                      |
 | --set-defaults              | Bool    |          | false            | change default storage class from source to dest                                                   |

@@ -51,7 +51,7 @@ func Validate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface,
 	}
 
 	// validate access modes for all PVCs using the source storage class
-	pvcs, err := pvcsForStorageClass(ctx, w, clientset, options.SourceSCName, options.Namespace)
+	pvcs, err := pvcsForStorageClass(ctx, w, clientset, options.SourceSCName, options.Namespace, options.PVCName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get PVCs for storage %s: %w", options.SourceSCName, err)
 	}
@@ -377,8 +377,8 @@ func getPVCError(ctx context.Context, client k8sclient.Interface, pvc *corev1.Pe
 }
 
 // pvcsForStorageClass returns all PersistentVolumeClaims, filtered by namespace, for a given
-// storage class
-func pvcsForStorageClass(ctx context.Context, _ *log.Logger, client k8sclient.Interface, srcSC, namespace string) (map[string]corev1.PersistentVolumeClaim, error) {
+// storage class. If pvcName is not empty, only the PVC with that name is returned.
+func pvcsForStorageClass(ctx context.Context, _ *log.Logger, client k8sclient.Interface, srcSC, namespace, pvcName string) (map[string]corev1.PersistentVolumeClaim, error) {
 	srcPVs, err := k8sutil.PVsByStorageClass(ctx, client, srcSC)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get PVs for storage class %s: %w", srcSC, err)
@@ -393,6 +393,9 @@ func pvcsForStorageClass(ctx context.Context, _ *log.Logger, client k8sclient.In
 				return nil, fmt.Errorf("failed to get PVC for PV %s in %s: %w", pv.Spec.ClaimRef.Name, pv.Spec.ClaimRef.Namespace, err)
 			}
 			if pv.Spec.ClaimRef.Namespace == namespace || namespace == "" {
+				if pvcName != "" && pv.Spec.ClaimRef.Name != pvcName {
+					continue
+				}
 				srcPVCs[pv.Spec.ClaimRef.Name] = *pvc.DeepCopy()
 			}
 		} else {

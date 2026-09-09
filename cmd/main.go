@@ -37,6 +37,7 @@ func main() {
 	flag.StringVar(&options.RsyncImage, "rsync-image", "eeacms/rsync:2.3", "the image to use to copy PVCs - must have 'rsync' on the path")
 	flag.StringVar(&rsyncFlags, "rsync-flags", "", "additional flags to pass to rsync command")
 	flag.StringVar(&options.Namespace, "namespace", "", "only migrate PVCs within this namespace")
+	flag.StringVar(&options.PVCName, "pvc-name", "", "migrate only the PVC with this name (requires --namespace)")
 	flag.BoolVar(&options.SetDefaults, "set-defaults", false, "change default storage class from source to dest")
 	flag.BoolVar(&options.VerboseCopy, "verbose-copy", false, "show output from the rsync command used to copy data between PVCs")
 	flag.BoolVar(&options.PreSyncMode, "pre-sync-mode", false, "create the new PVC and copy the data, then scale down, run another copy and finally swap the PVCs")
@@ -52,6 +53,14 @@ func main() {
 	// update options with flag values
 	options.PodReadyTimeout = time.Duration(podReadyTimeout) * time.Second
 	options.DeletePVTimeout = time.Duration(deletePVTimeout) * time.Second
+
+	// PVC names are not unique across namespaces, so a namespace is required to
+	// identify a single PVC unambiguously
+	if options.PVCName != "" && options.Namespace == "" {
+		fmt.Println("error: --pvc-name requires --namespace to be set, as PVC names are not unique across namespaces")
+		flag.Usage()
+		os.Exit(1)
+	}
 
 	if rsyncFlags != "" {
 		rsyncFlagsSlice := strings.Split(rsyncFlags, ",")

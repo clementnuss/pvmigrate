@@ -49,6 +49,7 @@ type Options struct {
 	RsyncImage           string
 	RsyncFlags           []string
 	Namespace            string
+	PVCName              string
 	SetDefaults          bool
 	VerboseCopy          bool
 	PreSyncMode          bool
@@ -470,13 +471,17 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 	skippedPVsCount := 0
 	matchingPVCs := map[string][]*corev1.PersistentVolumeClaim{}
 	for _, pv := range matchingPVs {
-		if opts.MaxPVs > 0 && matchingPVCsCount >= opts.MaxPVs {
+		if opts.PVCName == "" && opts.MaxPVs > 0 && matchingPVCsCount >= opts.MaxPVs {
 			skippedPVsCount++
 			continue
 		}
 		if pv.Spec.ClaimRef != nil {
-			if len(opts.Namespace) > 0 && pv.Spec.ClaimRef.Namespace != opts.Namespace {
+			if opts.Namespace != "" && pv.Spec.ClaimRef.Namespace != opts.Namespace {
 				continue // early continue, to prevent logging info regarding PV/PVCs in other namespaces
+			}
+
+			if opts.PVCName != "" && pv.Spec.ClaimRef.Name != opts.PVCName {
+				continue // only migrate the single requested PVC, if one was specified
 			}
 
 			if strings.HasSuffix(pv.Spec.ClaimRef.Name, k8sutil.PVCNameSuffix) {
@@ -499,6 +504,10 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 
 	if skippedPVsCount > 0 {
 		w.Printf("\nReached the maximum of %d PVs to process, skipping %d additional PVs. Run pvmigrate again to migrate them.\n", opts.MaxPVs, skippedPVsCount)
+	}
+
+	if opts.PVCName != "" && matchingPVCsCount == 0 {
+		return nil, nil, fmt.Errorf("PVC %s not found in the source StorageClass %s", opts.PVCName, opts.SourceSCName)
 	}
 
 	// remove duplicates, ensuring pvcs are unique per namespace

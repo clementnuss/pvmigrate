@@ -596,6 +596,7 @@ func Test_pvcsForStorageClass(t *testing.T) {
 		name      string
 		scname    string
 		namespace string
+		pvcName   string
 		wantErr   bool
 		resources []runtime.Object
 		expected  map[string]corev1.PersistentVolumeClaim
@@ -820,6 +821,90 @@ func Test_pvcsForStorageClass(t *testing.T) {
 			},
 		},
 		{
+			name:      "When pvc name is set expect only the matching pvc",
+			scname:    "default",
+			namespace: "",
+			pvcName:   "pvc1",
+			expected: map[string]corev1.PersistentVolumeClaim{
+				"pvc1": {
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "pvc1",
+						Namespace: "test",
+					},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						StorageClassName: ptr.To("default"),
+						AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteOnce"},
+						Resources: corev1.VolumeResourceRequirements{
+							Requests: corev1.ResourceList{
+								corev1.ResourceStorage: resource.MustParse("1Mi"),
+							},
+						},
+					},
+				},
+			},
+			resources: []runtime.Object{
+				&storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "default",
+					},
+				},
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pv0",
+					},
+					Spec: corev1.PersistentVolumeSpec{
+						StorageClassName: "default",
+						ClaimRef: &corev1.ObjectReference{
+							Name:      "pvc0",
+							Namespace: "default",
+						},
+					},
+				},
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pv1",
+					},
+					Spec: corev1.PersistentVolumeSpec{
+						StorageClassName: "default",
+						ClaimRef: &corev1.ObjectReference{
+							Name:      "pvc1",
+							Namespace: "test",
+						},
+					},
+				},
+				&corev1.PersistentVolumeClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "pvc0",
+						Namespace: "default",
+					},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						StorageClassName: ptr.To("default"),
+						AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteOnce"},
+						Resources: corev1.VolumeResourceRequirements{
+							Requests: corev1.ResourceList{
+								corev1.ResourceStorage: resource.MustParse("1Mi"),
+							},
+						},
+					},
+				},
+				&corev1.PersistentVolumeClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "pvc1",
+						Namespace: "test",
+					},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						StorageClassName: ptr.To("default"),
+						AccessModes:      []corev1.PersistentVolumeAccessMode{"ReadWriteOnce"},
+						Resources: corev1.VolumeResourceRequirements{
+							Requests: corev1.ResourceList{
+								corev1.ResourceStorage: resource.MustParse("1Mi"),
+							},
+						},
+					},
+				},
+			},
+		},
+		{
 			name:      "When PV does not have an associated PVC expect error",
 			scname:    "default",
 			namespace: "default",
@@ -893,7 +978,7 @@ func Test_pvcsForStorageClass(t *testing.T) {
 			req := require.New(t)
 			kcli := fake.NewClientset(tt.resources...)
 			logger := log.New(io.Discard, "", 0)
-			result, err := pvcsForStorageClass(context.Background(), logger, kcli, tt.scname, tt.namespace)
+			result, err := pvcsForStorageClass(context.Background(), logger, kcli, tt.scname, tt.namespace, tt.pvcName)
 			if err != nil {
 				if tt.wantErr {
 					req.Error(err)
