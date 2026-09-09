@@ -41,7 +41,7 @@ func main() {
 	flag.BoolVar(&options.VerboseCopy, "verbose-copy", false, "show output from the rsync command used to copy data between PVCs")
 	flag.BoolVar(&options.PreSyncMode, "pre-sync-mode", false, "create the new PVC and copy the data, then scale down, run another copy and finally swap the PVCs")
 	flag.BoolVar(&options.SkipSourceValidation, "skip-source-validation", false, "migrate from PVCs using a particular StorageClass name, even if that StorageClass does not exist")
-	flag.IntVar(&options.MaxPVs, "max-pvs", 0, "maximum number of PVs to process. default to 0 (unlimited)")
+	flag.IntVar(&options.MaxPVs, "max-pvs", 0, "maximum number of PVs to process. default to 0 (unlimited). If the maximum is exceeded, only that number of PVs will be migrated; the rest are left untouched and can be migrated by running pvmigrate again")
 	flag.IntVar(&podReadyTimeout, "pod-ready-timeout", 60, "length of time to wait (in seconds) for validation pod(s) to go into Ready phase")
 	flag.IntVar(&deletePVTimeout, "delete-pv-timeout", 300, "length of time to wait (in seconds) for backing PV to be removed when temporary PVC is deleted")
 	flag.BoolVar(&skipPreflightValidation, "skip-preflight-validation", false, "skip preflight migration validation on the destination storage provider")

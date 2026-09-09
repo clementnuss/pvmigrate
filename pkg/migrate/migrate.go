@@ -74,8 +74,14 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		return err
 	}
 
+	// annotate source nodes before any data copy, including the pre-sync one
+	err = annotateSourceNodes(ctx, w, clientset, matchingPVCs)
+	if err != nil {
+		return fmt.Errorf("failed to annotate source nodes: %w", err)
+	}
+
 	if options.PreSyncMode {
-		err = copyAllPVCs(ctx, w, clientset, &options, matchingPVCs, 1*time.Second)
+		err = copyAllPVCs(ctx, w, clientset, &options, matchingPVCs, 1*time.Second, true)
 		if err != nil {
 			return err
 		}
@@ -86,7 +92,7 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		return fmt.Errorf("failed to scale down pods: %w", err)
 	}
 
-	err = copyAllPVCs(ctx, w, clientset, &options, matchingPVCs, 1*time.Second)
+	err = copyAllPVCs(ctx, w, clientset, &options, matchingPVCs, 1*time.Second, false)
 	if err != nil {
 		return err
 	}
@@ -183,15 +189,19 @@ func swapDefaultStorageClasses(ctx context.Context, w *log.Logger, clientset k8s
 	return nil
 }
 
-func copyAllPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, options *Options, matchingPVCs map[string][]*corev1.PersistentVolumeClaim, waitTime time.Duration) error {
+func copyAllPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, options *Options, matchingPVCs map[string][]*corev1.PersistentVolumeClaim, waitTime time.Duration, isPreSync bool) error {
 	// create a pod for each PVC migration, and wait for it to finish
-	w.Printf("\nCopying data from %s PVCs to %s PVCs\n", options.SourceSCName, options.DestSCName)
+	if isPreSync {
+		w.Printf("\nPre-syncing data from %s PVCs to %s PVCs (the source pods are still running, a final sync will run after they are scaled down)\n", options.SourceSCName, options.DestSCName)
+	} else {
+		w.Printf("\nCopying data from %s PVCs to %s PVCs\n", options.SourceSCName, options.DestSCName)
+	}
 	for ns, nsPvcs := range matchingPVCs {
 		for _, nsPvc := range nsPvcs {
 			sourcePvcName, destPvcName := nsPvc.Name, k8sutil.NewPvcName(nsPvc.Name)
 			w.Printf("Copying data from %s (%s) to %s in %s\n", sourcePvcName, nsPvc.Spec.VolumeName, destPvcName, ns)
 
-			err := copyOnePVC(ctx, w, clientset, ns, sourcePvcName, destPvcName, options, waitTime)
+			err := copyOnePVC(ctx, w, clientset, ns, sourcePvcName, destPvcName, options, waitTime, isPreSync)
 			if err != nil {
 				return fmt.Errorf("failed to copy PVC %s in %s: %w", nsPvc.Name, ns, err)
 			}
@@ -200,11 +210,15 @@ func copyAllPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interfa
 	return nil
 }
 
-func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, ns string, sourcePvcName string, destPvcName string, options *Options, waitTime time.Duration) error {
+func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, ns string, sourcePvcName string, destPvcName string, options *Options, waitTime time.Duration, isPreSync bool) error {
 	w.Printf("Determining the node to migrate PVC %s on\n", sourcePvcName)
 	nodeName, err := getDesiredNode(ctx, clientset, ns, sourcePvcName)
 	if err != nil {
 		return fmt.Errorf("failed to get node for PVC %s in %s: %w", sourcePvcName, ns, err)
+	}
+
+	if nodeName == "" {
+		w.Printf("No node determined for PVC %s in %s, the migrator pod will not be pinned to a node. This may fail if the PVC is mounted by a pod on another node.\n", sourcePvcName, ns)
 	}
 
 	w.Printf("Creating pvc migrator pod on node %s\n", nodeName)
@@ -325,7 +339,11 @@ func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interfac
 		time.Sleep(waitTime)
 	}
 
-	w.Printf("finished migrating PVC %s\n", sourcePvcName)
+	if isPreSync {
+		w.Printf("finished pre-syncing PVC %s\n", sourcePvcName)
+	} else {
+		w.Printf("finished migrating PVC %s\n", sourcePvcName)
+	}
 	return nil
 }
 
@@ -449,10 +467,12 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 
 	// get PVCs using specified PVs
 	matchingPVCsCount := 0
+	skippedPVsCount := 0
 	matchingPVCs := map[string][]*corev1.PersistentVolumeClaim{}
 	for _, pv := range matchingPVs {
 		if opts.MaxPVs > 0 && matchingPVCsCount >= opts.MaxPVs {
-			break
+			skippedPVsCount++
+			continue
 		}
 		if pv.Spec.ClaimRef != nil {
 			if len(opts.Namespace) > 0 && pv.Spec.ClaimRef.Namespace != opts.Namespace {
@@ -475,6 +495,10 @@ func getPVCs(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		} else {
 			return nil, nil, fmt.Errorf("PV %s does not have an associated PVC - resolve this before rerunning", pv.Name)
 		}
+	}
+
+	if skippedPVsCount > 0 {
+		w.Printf("\nReached the maximum of %d PVs to process, skipping %d additional PVs. Run pvmigrate again to migrate them.\n", opts.MaxPVs, skippedPVsCount)
 	}
 
 	// remove duplicates, ensuring pvcs are unique per namespace
@@ -713,11 +737,43 @@ func mutateSC(ctx context.Context, w *log.Logger, clientset k8sclient.Interface,
 	}
 }
 
+func annotateSourceNodes(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, matchingPVCs map[string][]*corev1.PersistentVolumeClaim) error {
+	for ns, nsPvcs := range matchingPVCs {
+		nsPods, err := clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to get pods in %s: %w", ns, err)
+		}
+		for _, nsPod := range nsPods.Items {
+			for _, podVol := range nsPod.Spec.Volumes {
+				if podVol.PersistentVolumeClaim != nil {
+					for _, nsPvClaim := range nsPvcs {
+						if podVol.PersistentVolumeClaim.ClaimName == nsPvClaim.Name {
+							err = mutatePV(ctx, w, clientset, nsPvClaim.Spec.VolumeName, func(volume *corev1.PersistentVolume) (*corev1.PersistentVolume, error) {
+								// add annotations describing what node this data came from to help migrate
+								if volume.Annotations == nil {
+									volume.Annotations = map[string]string{}
+								}
+								volume.Annotations[sourceNodeAnnotation] = nsPod.Spec.NodeName
+								return volume, nil
+							}, func(volume *corev1.PersistentVolume) bool {
+								return volume.Annotations[sourceNodeAnnotation] == nsPod.Spec.NodeName
+							})
+							if err != nil {
+								return fmt.Errorf("failed to annotate pv %s (backs pvc %s) with node name %s: %w", nsPvClaim.Spec.VolumeName, nsPvClaim.Name, nsPod.Spec.NodeName, err)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // scaleDownPods scales down statefulsets & deployments controlling pods mounting PVCs in a supplied list
 // it will also cleanup WIP migration pods it discovers that happen to be mounting a supplied PVC.
 // if a pod is not created by pvmigrate, and is not controlled by a statefulset/deployment, this function will return an error.
 // if waitForCleanup is true, after scaling down deployments/statefulsets it will wait for all pods to be deleted.
-// It returns a map of namespace to PVCs and any errors encountered.
 func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, matchingPVCs map[string][]*corev1.PersistentVolumeClaim, checkInterval time.Duration) error {
 
 	// get pods using specified PVCs
@@ -737,40 +793,6 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 							matchingPods[ns] = append(matchingPods[ns], nsPod)
 							matchingPodsCount++
 							break perPodLoop // exit the for _, podVol := range nsPod.Spec.Volumes loop, as we've already determined that this pod matches
-						}
-					}
-				}
-			}
-		}
-	}
-
-	for ns, nsPvcs := range matchingPVCs {
-		nsPods, err := clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{})
-		if err != nil {
-			return fmt.Errorf("failed to get pods in %s: %w", ns, err)
-		}
-		for _, nsPod := range nsPods.Items {
-			for _, podVol := range nsPod.Spec.Volumes {
-				if podVol.PersistentVolumeClaim != nil {
-					for _, nsPvClaim := range nsPvcs {
-						if podVol.PersistentVolumeClaim.ClaimName == nsPvClaim.Name {
-							// when migrating the pvc data we'll use the nodeName to create the volume
-							// on the node where the pod was originally scheduled on
-
-							// TODO this is the only place in this function that we mutate the existing cluster, is there a better way?
-							err = mutatePV(ctx, w, clientset, nsPvClaim.Spec.VolumeName, func(volume *corev1.PersistentVolume) (*corev1.PersistentVolume, error) {
-								// add annotations describing what node this data came from to help migrate
-								if volume.Annotations == nil {
-									volume.Annotations = map[string]string{}
-								}
-								volume.Annotations[sourceNodeAnnotation] = nsPod.Spec.NodeName
-								return volume, nil
-							}, func(volume *corev1.PersistentVolume) bool {
-								return volume.Annotations[sourceNodeAnnotation] == nsPod.Spec.NodeName
-							})
-							if err != nil {
-								return fmt.Errorf("failed to annotate pv %s (backs pvc %s) with node name %s: %w", nsPvClaim.Spec.VolumeName, nsPvClaim.Name, nsPod.Spec.NodeName, err)
-							}
 						}
 					}
 				}

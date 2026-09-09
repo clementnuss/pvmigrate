@@ -37,6 +37,8 @@ pvmigrate --source-sc "source" --dest-sc "destination" --preflight-validation-on
 | --rsync-flags               | String  |          |                  | A comma-separated list of additional flags to pass to rsync when copying PVCs                      |
 | --set-defaults              | Bool    |          | false            | change default storage class from source to dest                                                   |
 | --verbose-copy              | Bool    |          | false            | show output from the rsync command used to copy data between PVCs                                  |
+| --pre-sync-mode             | Bool    |          | false            | copy data to the new PVCs before scaling down pods, then run a final sync after scaling down. Reduces downtime |
+| --max-pvs                   | Integer |          | 0                | maximum number of PVs to process. default to 0 (unlimited). If the maximum is exceeded, only that number of PVs will be migrated; the rest are left untouched and can be migrated by running pvmigrate again |
 | --skip-source-validation    | Bool    |          | false            | migrate from PVCs using a particular StorageClass name, even if that StorageClass does not exist   |
 | --preflight-validation-only | Bool    |          | false            | skip the migration and run preflight validation only                                               |
 | --skip-preflight-validation | Bool    |          | false            | skip preflight migration validation on the destination storage provider                            |
@@ -57,15 +59,21 @@ In order, it:
 4. Creates new PVCs for each existing PVC
     * Uses the `dest` StorageClass for the new PVCs
     * Uses the access mode set in the annotation: `kurl.sh/pvcmigrate-destinationaccessmode` if specified on a source PVC
-5. For each PVC:
+5. Annotates the PVs backing the existing PVCs with the node name of the pod mounting them, so that the migration
+   pods can be scheduled on the same node (needed for RWO volumes)
+6. If `--pre-sync-mode` is set, for each PVC:
+    * Creates a pod mounting both the original and replacement PVC which then `rsync`s data between the two, while
+      the source pods are still running
+    * Waits for that invocation of `rsync` to complete
+7. For each PVC:
     * Finds all pods mounting the existing PVC
     * Finds all StatefulSets and Deployments controlling those pods and adds an annotation with the original scale
       before setting that scale to 0
     * Waits for all pods mounting the existing PVC to be removed
-6. For each PVC:
+8. For each PVC:
     * Creates a pod mounting both the original and replacement PVC which then `rsync`s data between the two
     * Waits for that invocation of `rsync` to complete
-7. For each PVC:
+9. For each PVC:
     * Marks all the PVs associated with the original and replacement PVCs as 'retain', so that they will not be deleted
       when the PVCs are removed, and adds an annotation to the replacement PV with the original's reclaim policy
     * Deletes the original PVC so that the name is available, and removes the association between the PV and the removed
@@ -75,8 +83,8 @@ In order, it:
     * Creates a new PVC with the original name, but associated with the replacement PV
     * Sets the reclaim policy of the replacement PV to be what the original PV was set to
     * Deletes the original PV
-8. Resets the scales of the affected StatefulSets and Deployments
-9. If `--set-defaults` is set, changes the default StorageClass to `dest`
+10. Resets the scales of the affected StatefulSets and Deployments
+11. If `--set-defaults` is set, changes the default StorageClass to `dest`
 
 ## Known Limitations
 
