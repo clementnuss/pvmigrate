@@ -769,7 +769,7 @@ func scaleDownPods(ctx context.Context, w *log.Logger, clientset k8sclient.Inter
 								return volume.Annotations[sourceNodeAnnotation] == nsPod.Spec.NodeName
 							})
 							if err != nil {
-								return nil, fmt.Errorf("failed to annotate pv %s (backs pvc %s) with node name %s: %w", nsPvClaim.Spec.VolumeName, nsPvClaim.Name, nsPod.Spec.NodeName, err)
+								return fmt.Errorf("failed to annotate pv %s (backs pvc %s) with node name %s: %w", nsPvClaim.Spec.VolumeName, nsPvClaim.Name, nsPod.Spec.NodeName, err)
 							}
 						}
 					}
