@@ -26,6 +26,16 @@ To run preflight migration validation without actually running the migration ope
 pvmigrate --source-sc "source" --dest-sc "destination" --preflight-validation-only
 ```
 
+To split the migration into two phases (reduces downtime by copying data while pods are still running):
+
+```bash
+# Phase 1: copy data to new PVCs without scaling down pods
+pvmigrate --source-sc "source" --dest-sc "destination" --pre-sync-only
+
+# Phase 2: scale down, run final incremental sync, swap PVCs, scale back up
+pvmigrate --source-sc "source" --dest-sc "destination"
+```
+
 ## Flags
 
 | Flag                        | Type    | Required | Default          | Description                                                                                        |
@@ -38,6 +48,7 @@ pvmigrate --source-sc "source" --dest-sc "destination" --preflight-validation-on
 | --set-defaults              | Bool    |          | false            | change default storage class from source to dest                                                   |
 | --verbose-copy              | Bool    |          | false            | show output from the rsync command used to copy data between PVCs                                  |
 | --pre-sync-mode             | Bool    |          | false            | copy data to the new PVCs before scaling down pods, then run a final sync after scaling down. Reduces downtime |
+| --pre-sync-only             | Bool    |          | false            | copy data to the new PVCs while source pods are still running, then exit. Run pvmigrate again without this flag to complete the migration |
 | --max-pvs                   | Integer |          | 0                | maximum number of PVs to process. default to 0 (unlimited). If the maximum is exceeded, only that number of PVs will be migrated; the rest are left untouched and can be migrated by running pvmigrate again |
 | --skip-source-validation    | Bool    |          | false            | migrate from PVCs using a particular StorageClass name, even if that StorageClass does not exist   |
 | --preflight-validation-only | Bool    |          | false            | skip the migration and run preflight validation only                                               |

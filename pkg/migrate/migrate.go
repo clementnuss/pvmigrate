@@ -52,6 +52,7 @@ type Options struct {
 	SetDefaults          bool
 	VerboseCopy          bool
 	PreSyncMode          bool
+	PreSyncOnly          bool
 	MaxPVs               int
 	SkipSourceValidation bool
 	PodReadyTimeout      time.Duration
@@ -68,6 +69,9 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 	if options.PreSyncMode {
 		w.Println("\nRunning in pre-sync-mode: we first copy the PVC live, without scaling down pods. Once that pre-sync is completed, we scale down, do another copy/sync and finally swap the PVCs.")
 	}
+	if options.PreSyncOnly {
+		w.Println("\nRunning in pre-sync-only mode: we copy the PVC live, without scaling down pods, then exit. Run pvmigrate again without --pre-sync-only to complete the migration.")
+	}
 
 	matchingPVCs, namespaces, err := getPVCs(ctx, w, clientset, &options)
 	if err != nil {
@@ -80,11 +84,16 @@ func Migrate(ctx context.Context, w *log.Logger, clientset k8sclient.Interface, 
 		return fmt.Errorf("failed to annotate source nodes: %w", err)
 	}
 
-	if options.PreSyncMode {
+	if options.PreSyncMode || options.PreSyncOnly {
 		err = copyAllPVCs(ctx, w, clientset, &options, matchingPVCs, 1*time.Second, true)
 		if err != nil {
 			return err
 		}
+	}
+
+	if options.PreSyncOnly {
+		w.Printf("\nPre-sync complete. Run pvmigrate again without --pre-sync-only to perform the final sync, swap PVCs, and scale pods back up.\n")
+		return nil
 	}
 
 	err = scaleDownPods(ctx, w, clientset, matchingPVCs, time.Second*5)
