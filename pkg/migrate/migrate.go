@@ -231,7 +231,7 @@ func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interfac
 	}
 
 	w.Printf("Creating pvc migrator pod on node %s\n", nodeName)
-	createdPod, err := createMigrationPod(ctx, clientset, ns, sourcePvcName, destPvcName, options.RsyncImage, nodeName, options.RsyncFlags)
+	createdPod, err := createMigrationPod(ctx, clientset, ns, sourcePvcName, destPvcName, options.RsyncImage, nodeName, options.RsyncFlags, isPreSync)
 	if err != nil {
 		return err
 	}
@@ -356,10 +356,11 @@ func copyOnePVC(ctx context.Context, w *log.Logger, clientset k8sclient.Interfac
 	return nil
 }
 
-func createMigrationPod(ctx context.Context, clientset k8sclient.Interface, ns string, sourcePvcName string, destPvcName string, rsyncImage string, nodeName string, rsyncFlags []string) (*corev1.Pod, error) {
-	// apply nodeAffinity when migrating to a local volume provisioner
+func createMigrationPod(ctx context.Context, clientset k8sclient.Interface, ns string, sourcePvcName string, destPvcName string, rsyncImage string, nodeName string, rsyncFlags []string, isPreSync bool) (*corev1.Pod, error) {
+	// pin the pod to the source node when migrating to a local volume provisioner,
+	// or during the pre-sync pass, where the source PVC is still attached to that node
 	var nodeAffinity *corev1.Affinity
-	if isDestScLocalVolumeProvisioner && nodeName != "" {
+	if nodeName != "" && (isDestScLocalVolumeProvisioner || isPreSync) {
 		nodeAffinity = &corev1.Affinity{
 			NodeAffinity: &corev1.NodeAffinity{
 				RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{

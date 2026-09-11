@@ -934,6 +934,7 @@ func Test_createMigrationPod(t *testing.T) {
 		rsyncImage    string
 		nodeName      string
 		rsyncFlags    []string
+		isPreSync     bool
 	}
 	tests := []struct {
 		name            string
@@ -1194,6 +1195,172 @@ func Test_createMigrationPod(t *testing.T) {
 			},
 		},
 		{
+			name: "pre-sync mode with nodeName set",
+			args: args{
+				ns:            "testns",
+				sourcePvcName: "sourcepvc",
+				destPvcName:   "destpvc",
+				rsyncImage:    "imagename",
+				nodeName:      "node1",
+				isPreSync:     true,
+			},
+			want: &corev1.Pod{
+				TypeMeta: metav1.TypeMeta{
+					Kind:       "Pod",
+					APIVersion: "v1",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "migrate-sourcepvc",
+					Namespace: "testns",
+					Annotations: map[string]string{
+						baseAnnotation: "sourcepvc",
+						kindAnnotation: "migrate",
+					},
+				},
+				Spec: corev1.PodSpec{
+					Affinity: &corev1.Affinity{
+						NodeAffinity: &corev1.NodeAffinity{
+							RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+								NodeSelectorTerms: []corev1.NodeSelectorTerm{
+									{
+										MatchExpressions: []corev1.NodeSelectorRequirement{
+											{
+												Key:      "kubernetes.io/hostname",
+												Operator: corev1.NodeSelectorOperator("In"),
+												Values:   []string{"node1"},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+					RestartPolicy: corev1.RestartPolicyNever,
+					Volumes: []corev1.Volume{
+						{
+							Name: "source",
+							VolumeSource: corev1.VolumeSource{
+								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+									ClaimName: "sourcepvc",
+								},
+							},
+						},
+						{
+							Name: "dest",
+							VolumeSource: corev1.VolumeSource{
+								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+									ClaimName: "destpvc",
+								},
+							},
+						},
+					},
+					Containers: []corev1.Container{
+						{
+							Name:  "pvmigrate",
+							Image: "imagename",
+							Command: []string{
+								"rsync",
+							},
+							Args: []string{
+								"-a",       // use the "archive" method to copy files recursively with permissions/ownership/etc
+								"-v",       // show verbose output
+								"-P",       // show progress, and resume aborted/partial transfers
+								"--delete", // delete files in dest that are not in source
+								"/source/",
+								"/dest",
+							},
+							VolumeMounts: []corev1.VolumeMount{
+								{
+									MountPath: "/source",
+									Name:      "source",
+								},
+								{
+									MountPath: "/dest",
+									Name:      "dest",
+								},
+							},
+						},
+					},
+				},
+				Status: corev1.PodStatus{},
+			},
+		},
+		{
+			name: "pre-sync mode with empty nodeName",
+			args: args{
+				ns:            "testns",
+				sourcePvcName: "sourcepvc",
+				destPvcName:   "destpvc",
+				rsyncImage:    "imagename",
+				nodeName:      "",
+				isPreSync:     true,
+			},
+			want: &corev1.Pod{
+				TypeMeta: metav1.TypeMeta{
+					Kind:       "Pod",
+					APIVersion: "v1",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "migrate-sourcepvc",
+					Namespace: "testns",
+					Annotations: map[string]string{
+						baseAnnotation: "sourcepvc",
+						kindAnnotation: "migrate",
+					},
+				},
+				Spec: corev1.PodSpec{
+					Affinity:      nil,
+					RestartPolicy: corev1.RestartPolicyNever,
+					Volumes: []corev1.Volume{
+						{
+							Name: "source",
+							VolumeSource: corev1.VolumeSource{
+								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+									ClaimName: "sourcepvc",
+								},
+							},
+						},
+						{
+							Name: "dest",
+							VolumeSource: corev1.VolumeSource{
+								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+									ClaimName: "destpvc",
+								},
+							},
+						},
+					},
+					Containers: []corev1.Container{
+						{
+							Name:  "pvmigrate",
+							Image: "imagename",
+							Command: []string{
+								"rsync",
+							},
+							Args: []string{
+								"-a",       // use the "archive" method to copy files recursively with permissions/ownership/etc
+								"-v",       // show verbose output
+								"-P",       // show progress, and resume aborted/partial transfers
+								"--delete", // delete files in dest that are not in source
+								"/source/",
+								"/dest",
+							},
+							VolumeMounts: []corev1.VolumeMount{
+								{
+									MountPath: "/source",
+									Name:      "source",
+								},
+								{
+									MountPath: "/dest",
+									Name:      "dest",
+								},
+							},
+						},
+					},
+				},
+				Status: corev1.PodStatus{},
+			},
+		},
+		{
 			name: "additional rsync flags",
 			args: args{
 				ns:            "testns",
@@ -1281,7 +1448,7 @@ func Test_createMigrationPod(t *testing.T) {
 				tt.setGlobalFunc()
 			}
 
-			got, err := createMigrationPod(context.Background(), clientset, tt.args.ns, tt.args.sourcePvcName, tt.args.destPvcName, tt.args.rsyncImage, tt.args.nodeName, tt.args.rsyncFlags)
+			got, err := createMigrationPod(context.Background(), clientset, tt.args.ns, tt.args.sourcePvcName, tt.args.destPvcName, tt.args.rsyncImage, tt.args.nodeName, tt.args.rsyncFlags, tt.args.isPreSync)
 
 			if tt.clearGlobalFunc != nil {
 				tt.clearGlobalFunc()
